@@ -184,7 +184,17 @@ fi
 # MSYS2's package calls it <pdcurses.h>. Accept either header rather than
 # hard-coding one and sending people chasing the wrong problem.
 if [ "$windows_build" -eq 1 ]; then
-    TETRIS_LIBS=${TETRIS_LIBS:--static -lpdcurses -lwinmm}
+    # MSYS2's PDCurses package carries three back ends; libpdcurses.a is the
+    # Win32 GUI one and a console game wants libpdcurses_wincon.a. Classic
+    # PDCurses ships a single libpdcurses.a, so fall back to that.
+    TETRIS_LIBS=${TETRIS_LIBS:-}
+    if [ -z "$TETRIS_LIBS" ]; then
+        # shellcheck disable=SC2086  # $CFLAGS is a flag list and must word-split.
+        case $("$CC" $CFLAGS -print-file-name=libpdcurses_wincon.a 2>/dev/null) in
+            */*) TETRIS_LIBS='-static -lpdcurses_wincon -lwinmm' ;;
+            *)   TETRIS_LIBS='-static -lpdcurses -lwinmm' ;;
+        esac
+    fi
     TETRIS_CURSES_HEADERS='curses.h pdcurses.h'
 else
     TETRIS_LIBS=${TETRIS_LIBS:--lncurses}

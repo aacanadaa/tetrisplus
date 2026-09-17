@@ -123,10 +123,13 @@ jobs:
             mingw-w64-ucrt-x86_64-pdcurses
             zip
 
+      # MSYS2's PDCurses package carries three back ends and the plain
+      # libpdcurses.a is the Win32 GUI one; the console game wants the wincon
+      # back end, which is why the library name has the suffix.
       - name: Compile clean under -Wall -Wextra
         run: |
           gcc -O2 -Wall -Wextra -Werror tetris.c -o tetrisplus.exe \
-            -static -lpdcurses -lwinmm
+            -static -lpdcurses_wincon -lwinmm
 
       - name: build-windows.sh produces an archive
         run: |

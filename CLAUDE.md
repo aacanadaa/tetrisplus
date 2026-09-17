@@ -17,8 +17,8 @@ score table.
 ## Build
 
 ```sh
-gcc tetris.c -o tetrisplus -lncurses                  # Linux, macOS, BSD
-gcc tetris.c -o tetrisplus.exe -lpdcurses -lwinmm     # Windows (MSYS2 UCRT64)
+gcc tetris.c -o tetrisplus -lncurses                          # Linux, macOS, BSD
+gcc tetris.c -o tetrisplus.exe -lpdcurses_wincon -lwinmm      # Windows (MSYS2 UCRT64)
 ```
 
 System dependency (Ubuntu/Debian):
@@ -35,6 +35,11 @@ Everything platform-specific lives in the `#ifdef _WIN32` block at the top of
 - **Curses header.** PDCurses normally installs `<curses.h>`; the MSYS2 package
   ships the same API as `<pdcurses.h>`. `__has_include` picks whichever the
   toolchain can see, so no `-I` flag is needed.
+- **Curses library.** MSYS2's PDCurses package ships three back ends. The plain
+  `libpdcurses.a` is the Win32 GUI one; a console game must link
+  `libpdcurses_wincon.a` (plus `-lwinmm` for sound). Classic PDCurses installs a
+  single `libpdcurses.a`, so `build-windows.sh` and `install.sh` probe
+  `-print-file-name` and pick whichever exists.
 - **Timing.** `now_ms()` returns `GetTickCount64()` on Windows instead of
   `clock_gettime(CLOCK_MONOTONIC)`, and `srand()` seeds on `_getpid()`.
 - **Colours.** PDCurses has no "default background" `-1`, so `TETRIS_BG` is

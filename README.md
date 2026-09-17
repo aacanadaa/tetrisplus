@@ -214,11 +214,14 @@ rm -rf ~/snap/tetrisplus/current/.local/share/tetrisplus   # snap，如需单独
 ## 构建
 
 ```sh
-gcc tetris.c -o tetrisplus -lncurses                  # Linux、macOS、BSD
-gcc tetris.c -o tetrisplus.exe -lpdcurses -lwinmm     # Windows（MSYS2）
+gcc tetris.c -o tetrisplus -lncurses                          # Linux、macOS、BSD
+gcc tetris.c -o tetrisplus.exe -lpdcurses_wincon -lwinmm      # Windows（MSYS2）
 ```
 
-在 Windows 上加 `-static`，可以把 PDCurses、libgcc 和 libwinpthreads 一并打进
+MSYS2 的 PDCurses 包带有三个后端，其中普通的 `libpdcurses.a` 是 Win32 **图形
+界面**版本。控制台游戏需要 `libpdcurses_wincon.a`，因此名字带有后缀。（经典的
+PDCurses 只安装一个 `libpdcurses.a`，同样可用 —— 构建脚本会自动探测存在哪一个。）
+在 Windows 上再加 `-static`，可以把 curses 库、libgcc 和 libwinpthreads 一并打进
 `.exe`，从而在没有安装 MinGW 的机器上也能运行 —— `build-windows.sh` 和 Release
 压缩包就是这么做的。
 

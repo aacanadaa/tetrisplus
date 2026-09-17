@@ -231,13 +231,16 @@ above already contain a binary and need none of this.
 ## Build
 
 ```sh
-gcc tetris.c -o tetrisplus -lncurses                  # Linux, macOS, BSD
-gcc tetris.c -o tetrisplus.exe -lpdcurses -lwinmm     # Windows (MSYS2)
+gcc tetris.c -o tetrisplus -lncurses                          # Linux, macOS, BSD
+gcc tetris.c -o tetrisplus.exe -lpdcurses_wincon -lwinmm      # Windows (MSYS2)
 ```
 
-On Windows, add `-static` to fold PDCurses, libgcc and libwinpthreads into the
-`.exe` so it runs on a machine with no MinGW installed — that is what
-`build-windows.sh` and the release archive do.
+MSYS2's PDCurses package ships three back ends and the plain `libpdcurses.a` is
+the Win32 **GUI** one. A console game wants `libpdcurses_wincon.a`, hence the
+suffix. (Classic PDCurses, which installs a single `libpdcurses.a`, works too —
+the build scripts detect which one is present.) Add `-static` to fold the curses
+library, libgcc and libwinpthreads into the `.exe` so it runs on a machine with
+no MinGW installed; that is what `build-windows.sh` and the release archive do.
 
 ## Run
 

@@ -1,9 +1,13 @@
 """Drive the real tetris binary through a pty and read the screen back.
 
 Follows the recipe in the project's CLAUDE.md: pty + TIOCSWINSZ, pyte to decode,
-TERM=linux (no `rep` capability, which pyte cannot decode and which makes it
-render collapsed borders and misreport columns).
+and a terminfo with no `rep` capability (pyte cannot decode REP, so it renders
+collapsed borders and misreports columns). The child runs under LC_ALL=C so
+ncurses emits the DEC line-drawing set (which pyte passes through as plain
+`q`/`x`) on every platform, rather than UTF-8 box characters whose multi-byte
+sequences could also straddle a read() boundary.
 """
+import codecs
 import curses
 import errno
 import fcntl
@@ -46,6 +50,11 @@ class Harness:
         self.stream = pyte.Stream(self.screen)
         self.child = None
 
+        # Multi-byte characters can straddle two read() calls, so decode
+        # incrementally rather than per chunk -- otherwise a split sequence
+        # becomes a sprinkling of U+FFFD.
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
         # Resolve the terminal before forking: the child's TERM has to name the
         # entry we will actually decode with, or its ncurses aborts at startup.
         term = pick_term(term)
@@ -56,6 +65,9 @@ class Harness:
             env = dict(os.environ)
             env["TERM"] = term
             env["LINES"], env["COLUMNS"] = str(rows), str(cols)
+            # Force the C locale: ncurses then draws ACS with the terminfo
+            # line-drawing set instead of UTF-8, which is what pyte decodes.
+            env["LC_ALL"] = env["LANG"] = "C"
             if data_home:
                 env["XDG_DATA_HOME"] = data_home
             os.execve(binary, [binary], env)
@@ -94,7 +106,7 @@ class Harness:
                 reply = "\x1b[%d;%dR" % (
                     self.screen.cursor.y + 1, self.screen.cursor.x + 1)
                 os.write(self.fd, reply.encode())
-            self.stream.feed(data.decode("utf-8", "replace"))
+            self.stream.feed(self.decoder.decode(data))
 
     def send(self, name_or_bytes, settle=0.5):
         seq = self.keys.get(name_or_bytes, name_or_bytes)

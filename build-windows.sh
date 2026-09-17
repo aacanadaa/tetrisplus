@@ -54,15 +54,26 @@ case $(uname -m 2>/dev/null) in
     *)             arch=$(uname -m 2>/dev/null) ;;
 esac
 
+# MSYS2's PDCurses package carries three back ends and the plain libpdcurses.a
+# is the Win32 GUI one; a console game wants libpdcurses_wincon.a. Classic
+# PDCurses installs a single libpdcurses.a instead, so fall back to it. Ask the
+# compiler which one it can find (the search path includes $CFLAGS' -L) rather
+# than probing with a throwaway compile.
+# shellcheck disable=SC2086  # $CFLAGS is a flag list and must word-split.
+case $("$CC" $CFLAGS -print-file-name=libpdcurses_wincon.a 2>/dev/null) in
+    */*) PDC_LIB=pdcurses_wincon ;;
+    *)   PDC_LIB=pdcurses ;;
+esac
+
 mkdir -p "$OUT_DIR"
 exe=$OUT_DIR/$PROG.exe
 
 say "Building $PROG $version for windows-$arch"
-# -static folds libpdcurses, libgcc and libwinpthreads into the exe, so the
-# archive is one file that runs on a machine with no MinGW installed. winmm is
-# PDCursesMod's sound back end and is harmless on the classic PDCurses build.
+# -static folds the curses library, libgcc and libwinpthreads into the exe, so
+# the archive is one file that runs on a machine with no MinGW installed. winmm
+# is PDCurses' sound back end.
 # shellcheck disable=SC2086  # $CFLAGS is a flag list and must word-split.
-"$CC" $CFLAGS -o "$exe" "$SRC" -static -lpdcurses -lwinmm ||
+"$CC" $CFLAGS -o "$exe" "$SRC" -static -l"$PDC_LIB" -lwinmm ||
     die "the build failed (see the compiler output above)"
 
 stage=$(mktemp -d)
