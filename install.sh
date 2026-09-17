@@ -22,8 +22,27 @@ SRC=$SRC_DIR/tetris.c
 CC=${CC:-gcc}
 CFLAGS=${CFLAGS:--O2 -Wall -Wextra}
 
-prefix=/usr/local
+# On an MSYS2 MinGW shell, $MINGW_PREFIX (/ucrt64, /mingw64, ...) is the native
+# Windows tree whose bin/ is already on PATH -- installing there is what makes
+# `tetrisplus` runnable from a Windows command prompt. Elsewhere it is unset
+# and /usr/local is right.
+prefix=${MINGW_PREFIX:-/usr/local}
 do_uninstall=0
+
+# Whether this is a Windows build, decided before anything is compiled because
+# the install *and* the uninstall paths both need to agree on the .exe suffix.
+# _WIN32 is the honest test (MinGW and MSVC define it, POSIX gcc does not), with
+# the uname sniff as a fallback when $CC is missing and only --uninstall runs.
+case $(uname -s 2>/dev/null) in
+    MINGW*|MSYS*|CYGWIN*) windows_build=1 ;;
+    *)                    windows_build=0 ;;
+esac
+if [ "$windows_build" -eq 0 ] && command -v "$CC" >/dev/null 2>&1 &&
+   printf '' | "$CC" -dM -E -x c - 2>/dev/null | grep -q '^#define _WIN32'; then
+    windows_build=1
+fi
+EXE=
+[ "$windows_build" -eq 1 ] && EXE=.exe
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
@@ -62,7 +81,7 @@ while [ $# -gt 0 ]; do
 done
 
 bindir=$prefix/bin
-dest=$bindir/$PROG
+dest=$bindir/$PROG$EXE
 
 # Walk up to the nearest directory that exists and see whether we could create
 # $bindir inside it. For the default /usr/local/bin this is false for a normal
@@ -99,7 +118,11 @@ if [ "$do_uninstall" -eq 1 ]; then
     fi
     as_root rm -f "$dest"
     say "Removed $dest"
-    say "Your high scores were left in place (they live under \$XDG_DATA_HOME)."
+    if [ "$windows_build" -eq 1 ]; then
+        say "Your high scores were left in place (they live under %LOCALAPPDATA%)."
+    else
+        say "Your high scores were left in place (they live under \$XDG_DATA_HOME)."
+    fi
     exit 0
 fi
 
@@ -119,6 +142,13 @@ toolchain_hint() {
     case $(uname -s 2>/dev/null) in
         Darwin)
             printf '  xcode-select --install\n'
+            return ;;
+        MINGW*|MSYS*|CYGWIN*)
+            # MSYS2 names its PDCurses package after the active environment, so
+            # $MINGW_PACKAGE_PREFIX picks the right one (mingw-w64-ucrt-x86_64-
+            # and friends) instead of guessing an architecture.
+            printf '  pacman -S --needed %spdcurses\n' \
+                "${MINGW_PACKAGE_PREFIX:-mingw-w64-ucrt-x86_64-}"
             return ;;
         FreeBSD)
             printf '  pkg install gcc ncurses\n'
@@ -149,8 +179,28 @@ if ! printf 'int main(void){return 0;}\n' | "$CC" -x c -fsyntax-only - >/dev/nul
 $(toolchain_hint)"
 fi
 
-if ! printf '#include <ncurses.h>\n' | "$CC" -x c -fsyntax-only - >/dev/null 2>&1; then
-    die "the ncurses headers are missing. Install them with:
+# Which curses library to link, and which header name it installs. PDCurses --
+# the Windows port the game builds against -- normally ships <curses.h>, but
+# MSYS2's package calls it <pdcurses.h>. Accept either header rather than
+# hard-coding one and sending people chasing the wrong problem.
+if [ "$windows_build" -eq 1 ]; then
+    TETRIS_LIBS=${TETRIS_LIBS:--static -lpdcurses -lwinmm}
+    TETRIS_CURSES_HEADERS='curses.h pdcurses.h'
+else
+    TETRIS_LIBS=${TETRIS_LIBS:--lncurses}
+    TETRIS_CURSES_HEADERS='ncurses.h curses.h'
+fi
+
+curses_header=
+# shellcheck disable=SC2086  # the header list is deliberately word-split.
+for h in $TETRIS_CURSES_HEADERS; do
+    if printf '#include <%s>\n' "$h" | "$CC" -x c -fsyntax-only - >/dev/null 2>&1; then
+        curses_header=$h
+        break
+    fi
+done
+if [ -z "$curses_header" ]; then
+    die "the curses headers are missing. Install them with:
 $(toolchain_hint)"
 fi
 
@@ -160,14 +210,14 @@ build_dir=$(mktemp -d)
 trap 'rm -rf "$build_dir"' EXIT HUP INT TERM
 
 say "Building $PROG with $CC $CFLAGS"
-# shellcheck disable=SC2086  # $CFLAGS is a flag list and must word-split.
-"$CC" $CFLAGS -o "$build_dir/$PROG" "$SRC" -lncurses ||
+# shellcheck disable=SC2086  # $CFLAGS and $TETRIS_LIBS are flag lists.
+"$CC" $CFLAGS -o "$build_dir/$PROG$EXE" "$SRC" $TETRIS_LIBS ||
     die "the build failed (see the compiler output above)"
 
 # --- install ---------------------------------------------------------------
 
 as_root install -d -m 0755 "$bindir"
-as_root install -m 0755 "$build_dir/$PROG" "$dest"
+as_root install -m 0755 "$build_dir/$PROG$EXE" "$dest"
 
 say ""
 say "Installed $dest"

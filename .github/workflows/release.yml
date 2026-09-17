@@ -1,0 +1,110 @@
+name: Release
+
+# Cutting a release is `git tag -a v<version> && git push origin v<version>`.
+# Everything below then builds each platform on its own runner and publishes
+# the results as one GitHub release -- there is no hand-built asset.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux-deb:
+    name: Linux .deb
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libncurses-dev
+
+      - name: Build the Debian package
+        run: ./build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS binary
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build and archive
+        run: |
+          set -eu
+          version=$(sed -n 's/^version=\${1:-\(.*\)}$/\1/p' build-deb.sh)
+          test -n "$version"
+          gcc -O2 -Wall -Wextra tetris.c -o tetrisplus -lncurses
+          mkdir -p dist
+          tar -czf "dist/tetrisplus_${version}_macos_$(uname -m).tar.gz" \
+            tetrisplus tetris.c LICENSE README.md README.en.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows executable
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pdcurses
+            zip
+
+      - name: Build the Windows archive
+        run: ./build-windows.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*_windows_*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [linux-deb, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pull every platform's artifact into one directory, then add the source
+      # so the release carries tetris.c exactly as the older ones did.
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Add tetris.c to the release assets
+        run: cp tetris.c assets/
+
+      - name: Create the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

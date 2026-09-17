@@ -84,3 +84,59 @@ jobs:
           dpkg-deb -x dist/tetrisplus_*_amd64.deb /tmp/deb
           file /tmp/deb/usr/bin/tetrisplus | grep -q ELF
           test -s /tmp/deb/usr/share/man/man6/tetrisplus.6.gz
+
+  # The README advertises macOS and Windows, and Linux is the only platform the
+  # local pty suite can cover on its own, so these jobs are the only place the
+  # other two are compiled. On macOS the pty suite runs for real; on Windows a
+  # clean compile plus install/uninstall is as far as a headless runner goes.
+  macos:
+    name: Build and test on macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      # Same warning gate as Linux: a warning fails the build rather than
+      # scrolling past. gcc here is Apple's clang, -lncurses is in the SDK.
+      - name: Compile clean under -Wall -Wextra
+        run: gcc -O2 -Wall -Wextra -Werror tetris.c -o /tmp/tetris -lncurses
+
+      - name: Run the pty test suite
+        run: ./tests/run_tests.sh
+
+  windows:
+    name: Build on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pdcurses
+            zip
+
+      - name: Compile clean under -Wall -Wextra
+        run: |
+          gcc -O2 -Wall -Wextra -Werror tetris.c -o tetrisplus.exe \
+            -static -lpdcurses -lwinmm
+
+      - name: build-windows.sh produces an archive
+        run: |
+          ./build-windows.sh
+          ls -la dist/
+          test -s dist/tetrisplus_*_windows_*.zip
+
+      - name: install.sh installs and uninstalls
+        run: |
+          ./install.sh --user
+          test -x "$HOME/.local/bin/tetrisplus.exe"
+          ./install.sh --user --uninstall
+          test ! -e "$HOME/.local/bin/tetrisplus.exe"

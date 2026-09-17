@@ -1,8 +1,14 @@
 /*
- * tetris.c -- A complete Tetris for the Linux terminal, built on ncurses.
+ * tetris.c -- A complete Tetris for the terminal.
  *
- * Build:  gcc tetris.c -o tetrisplus -lncurses
- * Run:    ./tetrisplus
+ * Built on ncurses everywhere it exists, and on PDCurses on Windows, which
+ * exposes the same curses API under a plain <curses.h>. The two platforms are
+ * kept apart by the #ifdef _WIN32 block below and a handful of tiny shims --
+ * everything else in this file is shared, unmodified source.
+ *
+ * Build (Linux / macOS / BSD):  gcc tetris.c -o tetrisplus -lncurses
+ * Build (Windows / MSYS2):      gcc tetris.c -o tetrisplus.exe -lpdcurses
+ * Run:                          ./tetrisplus   (or tetrisplus.exe)
  *
  * Controls:
  *   Left / Right   move the falling piece
@@ -17,14 +23,45 @@
  * on Ctrl-C and on abnormal exit (atexit handler).
  */
 
-#include <ncurses.h>
+#ifdef _WIN32
+/* Windows: PDCurses, plus the Win32 pieces ncurses would otherwise provide.
+ * _CRT_SECURE_NO_WARNINGS has to be defined before any system header, or MSVC
+ * turns the C99 stdio calls into warnings. */
+#  define _CRT_SECURE_NO_WARNINGS 1
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN 1
+#  endif
+/* PDCurses installs the curses API as <curses.h>; the MSYS2 package ships the
+ * very same header as <pdcurses.h> instead. Ask the compiler which one it can
+ * actually see, so the source builds on either without a -I flag. */
+#  if defined(__has_include)
+#    if __has_include(<pdcurses.h>)
+#      include <pdcurses.h>
+#    elif __has_include(<curses.h>)
+#      include <curses.h>
+#    else
+#      include <curses.h>
+#    endif
+#  else
+#    include <curses.h>
+#  endif
+#  include <windows.h>            /* GetTickCount64() for the frame clock */
+#  include <direct.h>             /* _mkdir()                            */
+#  include <process.h>            /* _getpid()                           */
+#  define tetris_mkdir(path, mode) _mkdir(path)
+#  define TETRIS_BG COLOR_BLACK   /* PDCurses has no "default colour" -1 */
+#else
+#  include <ncurses.h>
+#  include <unistd.h>
+#  define tetris_mkdir(path, mode) mkdir(path, mode)
+#  define TETRIS_BG (-1)          /* the terminal's own background       */
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 
 #define BOARD_W    10          /* playfield width, in cells            */
 #define BOARD_H    20          /* playfield height, in cells           */
@@ -150,9 +187,15 @@ static void cleanup(void)
 
 static long now_ms(void)
 {
+#ifdef _WIN32
+    /* Milliseconds since boot, monotonic and 64-bit, so the same
+     * wrap-around reasoning as CLOCK_MONOTONIC applies. */
+    return (long)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+#endif
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -178,18 +221,20 @@ static void init_colors(void)
         return;
 
     start_color();
-    use_default_colors();
+#ifndef _WIN32
+    use_default_colors();     /* POSIX only; PDCurses uses TETRIS_BG instead */
+#endif
 
-    init_pair(PAIR_I,     COLOR_CYAN,    -1);
-    init_pair(PAIR_J,     COLOR_BLUE,    -1);
-    init_pair(PAIR_L,     COLOR_YELLOW,  -1);
-    init_pair(PAIR_O,     COLOR_WHITE,   -1);
-    init_pair(PAIR_S,     COLOR_GREEN,   -1);
-    init_pair(PAIR_T,     COLOR_MAGENTA, -1);
-    init_pair(PAIR_Z,     COLOR_RED,     -1);
-    init_pair(PAIR_FRAME, COLOR_WHITE,   -1);
-    init_pair(PAIR_LABEL, COLOR_CYAN,    -1);
-    init_pair(PAIR_TEXT,  COLOR_WHITE,   -1);
+    init_pair(PAIR_I,     COLOR_CYAN,    TETRIS_BG);
+    init_pair(PAIR_J,     COLOR_BLUE,    TETRIS_BG);
+    init_pair(PAIR_L,     COLOR_YELLOW,  TETRIS_BG);
+    init_pair(PAIR_O,     COLOR_WHITE,   TETRIS_BG);
+    init_pair(PAIR_S,     COLOR_GREEN,   TETRIS_BG);
+    init_pair(PAIR_T,     COLOR_MAGENTA, TETRIS_BG);
+    init_pair(PAIR_Z,     COLOR_RED,     TETRIS_BG);
+    init_pair(PAIR_FRAME, COLOR_WHITE,   TETRIS_BG);
+    init_pair(PAIR_LABEL, COLOR_CYAN,    TETRIS_BG);
+    init_pair(PAIR_TEXT,  COLOR_WHITE,   TETRIS_BG);
     init_pair(PAIR_OVER,  COLOR_RED,     COLOR_BLACK);
 }
 
@@ -446,7 +491,10 @@ static void today(char *buf, size_t len)
         snprintf(buf, len, "0000-00-00");
 }
 
-/* $XDG_DATA_HOME/tetrisplus, else ~/.local/share/tetrisplus.
+/* Where the score table lives.
+ *
+ * POSIX:   $XDG_DATA_HOME/tetrisplus, else ~/.local/share/tetrisplus.
+ * Windows: %LOCALAPPDATA%/tetrisplus, else %APPDATA%/tetrisplus.
  *
  * Renamed from "terminal-tetris" with the project. That deliberately orphans
  * every score table saved under the old name, so this is not a string to
@@ -454,9 +502,24 @@ static void today(char *buf, size_t len)
  * every player their high scores. */
 static int scores_dir(char *buf, size_t len)
 {
+    int n;
+
+#ifdef _WIN32
+    /* LOCALAPPDATA is the roaming-free application-data root, which is where
+     * a save file belongs; APPDATA is the fallback on ancient systems. Both
+     * are absolute and already exist, so only the last component is created.
+     * Forward slashes work with the Win32 file APIs and keep mkpath() and the
+     * rest of the shared code path-agnostic. */
+    const char *base = getenv("LOCALAPPDATA");
+    if (base == NULL || base[0] == '\0')
+        base = getenv("APPDATA");
+    if (base == NULL || base[0] == '\0')
+        return -1;
+
+    n = snprintf(buf, len, "%s/tetrisplus", base);
+#else
     const char *base = getenv("XDG_DATA_HOME");
     const char *home;
-    int n;
 
     if (base && base[0] == '/')
         n = snprintf(buf, len, "%s/tetrisplus", base);
@@ -464,6 +527,7 @@ static int scores_dir(char *buf, size_t len)
         n = snprintf(buf, len, "%s/.local/share/tetrisplus", home);
     else
         return -1;
+#endif
 
     return (n > 0 && (size_t)n < len) ? 0 : -1;
 }
@@ -496,10 +560,10 @@ static void mkpath(const char *path)
         if (*p != '/')
             continue;
         *p = '\0';
-        mkdir(tmp, 0700);
+        tetris_mkdir(tmp, 0700);
         *p = '/';
     }
-    mkdir(tmp, 0700);
+    tetris_mkdir(tmp, 0700);
 }
 
 /* Mode-aware ordering: fastest time wins on sprint-style modes, highest score
@@ -1332,7 +1396,11 @@ int main(void)
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
+#ifdef _WIN32
+    srand((unsigned)time(NULL) ^ (unsigned)_getpid());
+#else
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
+#endif
     init_shapes();
     load_scores();
 

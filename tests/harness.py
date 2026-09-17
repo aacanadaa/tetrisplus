@@ -21,12 +21,35 @@ import pyte
 COLS, ROWS = 80, 24
 
 
+def pick_term(preferred):
+    """Return the first terminfo entry this machine actually has.
+
+    `linux` is the ideal one here -- it has no `rep` capability, which pyte
+    cannot decode -- but it is not installed everywhere: macOS ships a much
+    smaller terminfo database. Fall back to other REP-free entries rather than
+    dying inside setupterm, and only use xterm as a last resort.
+    """
+    last = None
+    for candidate in (preferred, "vt100", "xterm"):
+        try:
+            curses.setupterm(term=candidate, fd=-1)
+            return candidate
+        except curses.error as e:                   # terminfo entry absent
+            last = e
+    raise RuntimeError("no usable terminfo entry (%s)" % last)
+
+
 class Harness:
     def __init__(self, binary, cols=COLS, rows=ROWS, term="linux", data_home=None):
         self.cols, self.rows = cols, rows
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.Stream(self.screen)
         self.child = None
+
+        # Resolve the terminal before forking: the child's TERM has to name the
+        # entry we will actually decode with, or its ncurses aborts at startup.
+        term = pick_term(term)
+        self.term = term
 
         pid, fd = pty.fork()
         if pid == 0:                                    # child

@@ -4,10 +4,12 @@ Project memory for Claude Code. Read this before changing anything here.
 
 ## Project
 
-A complete Tetris game for the terminal, written in C against ncurses. Runs on
-any POSIX system with ncurses — Linux, macOS and the BSDs.
+A complete Tetris game for the terminal, written in C. It builds against
+ncurses on any POSIX system (Linux, macOS and the BSDs) and against PDCurses on
+Windows; the two share the whole file apart from the single `#ifdef _WIN32`
+block at the top of `tetris.c`.
 Deliberately a **single translation unit** — no Makefile, no headers, no
-subdirectories. Everything lives in `tetris.c`, currently ~1100 lines.
+subdirectories. Everything lives in `tetris.c`, currently ~1400 lines.
 
 Features: a game menu, a mode system, and a persistent per-mode arcade high
 score table.
@@ -15,7 +17,8 @@ score table.
 ## Build
 
 ```sh
-gcc tetris.c -o tetrisplus -lncurses
+gcc tetris.c -o tetrisplus -lncurses                  # Linux, macOS, BSD
+gcc tetris.c -o tetrisplus.exe -lpdcurses -lwinmm     # Windows (MSYS2 UCRT64)
 ```
 
 System dependency (Ubuntu/Debian):
@@ -24,19 +27,39 @@ System dependency (Ubuntu/Debian):
 sudo apt update && sudo apt install -y build-essential libncurses-dev
 ```
 
-Keep the code **pure POSIX C99**. The README advertises macOS and the BSDs, so
-reaching for a GNU extension silently breaks a supported platform. The cheap
-check is to compile with the POSIX feature macro set, which hides anything
-glibc-only:
+## The Windows platform layer
+
+Everything platform-specific lives in the `#ifdef _WIN32` block at the top of
+`tetris.c`, and nothing else in the file is conditionally compiled:
+
+- **Curses header.** PDCurses normally installs `<curses.h>`; the MSYS2 package
+  ships the same API as `<pdcurses.h>`. `__has_include` picks whichever the
+  toolchain can see, so no `-I` flag is needed.
+- **Timing.** `now_ms()` returns `GetTickCount64()` on Windows instead of
+  `clock_gettime(CLOCK_MONOTONIC)`, and `srand()` seeds on `_getpid()`.
+- **Colours.** PDCurses has no "default background" `-1`, so `TETRIS_BG` is
+  `COLOR_BLACK` there and `-1` elsewhere; `use_default_colors()` is POSIX-only.
+- **Paths.** `_mkdir` replaces `mkdir`, and the score table lands in
+  `%LOCALAPPDATA%/tetrisplus` (falling back to `%APPDATA%`). Paths use forward
+  slashes throughout, which the Win32 APIs accept, so `mkpath()` stays shared.
+
+Do **not** move POSIX-only code into the shared section or reach for a
+`#ifdef _WIN32` deeper in the file: the whole point is that the game logic does
+not know what platform it is on.
+
+Keep the code **pure POSIX C99** outside that block. The README advertises macOS
+and the BSDs, so reaching for a GNU extension silently breaks a supported
+platform. The cheap check is to compile with the POSIX feature macro set, which
+hides anything glibc-only:
 
 ```sh
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra tetris.c -o /dev/null -lncurses
 ```
 
 No `<linux/*>`, no `/proc`, no epoll or inotify, no `strdupa`/`asprintf`-style
-extensions. Note that **only Linux is covered by the test suite**, so a
-portability regression will not be caught automatically — the compile above is
-the only guard there is.
+extensions. CI covers all three families: the pty suite runs on Linux and macOS,
+and Windows is compile-checked with MSYS2 and PDCurses (`ci.yml`). A regression
+on a platform CI cannot run will still need a manual build.
 
 There is no Makefile on purpose. If you find yourself wanting one, the change
 is out of scope for this project. Installation lives in shell scripts instead:
@@ -49,7 +72,11 @@ is out of scope for this project. Installation lives in shell scripts instead:
   `--uninstall` will silently find nothing. It prints a hint when that happens,
   but the failure mode is "nothing happened", not an error.
 - `build-deb.sh` — produces `dist/tetrisplus_<version>_<arch>.deb`, which
-  installs to `/usr/bin` for every user and declares `libncurses6`.
+  installs to `/usr/bin` for every user and declares `libncurses6`. This is
+  where the release version lives; every other script reads it back from here.
+- `build-windows.sh` — runs in an MSYS2 MinGW shell and produces
+  `dist/tetrisplus_<version>_windows_<arch>.zip` containing a statically linked
+  `tetrisplus.exe`.
 - `packaging/tetrisplus.6` — the man page, shipped by the `.deb`.
 - `snap/snapcraft.yaml` — packages the same source as the snap **`tetrisplus`**,
   published on the Snap Store. The compile lives in the part's `override-build`
@@ -61,8 +88,11 @@ is out of scope for this project. Installation lives in shell scripts instead:
 the POSIX feature macros are in scope. Under strict ISO C99 the build fails
 outright. The correct flags are `-O2 -Wall -Wextra`, which stay warning-clean.
 
-Both scripts build into a temp dir and never write into the repo, and both
-leave the score file alone — uninstalling does not lose anyone's high scores.
+The build scripts stage into a temp dir and never touch the score file —
+uninstalling does not lose anyone's high scores. `build-deb.sh` and
+`build-windows.sh` drop their finished package into `dist/`, which is
+gitignored; `install.sh` keeps its binary in a temp dir and never writes into
+the repo on its own.
 
 **Note on linking:** the plain `-lncurses` form is correct once
 `libncurses-dev` is installed. If you are building against headers extracted
@@ -264,10 +294,16 @@ against them. It reuses `$TETRIS_WORK`, so `run_tests.sh` has to run first. Two
 details matter there: it asserts `libasan` actually linked before trusting a
 green result, since a build the sanitizers never attached to would pass for
 entirely the wrong reason; and it sets `detect_leaks=0`, because ncurses holds
-allocations until `endwin()` and the exit report is pure noise. Both scripts run
-on every push and pull request through `.github/workflows/ci.yml`, which also
-compiles with `-Werror` and separately with `-D_POSIX_C_SOURCE` to guard the
-portability the README advertises.
+allocations until `endwin()` and the exit report is pure noise.
+
+`.github/workflows/ci.yml` runs `run_tests.sh` on every push and pull request on
+both Linux and macOS, and `run_sanitizers.sh` on Linux (LeakSanitizer is not
+portable). The same workflow also compiles with `-Werror`, separately with
+`-D_POSIX_C_SOURCE` to guard the portability the README advertises, and
+separately on Windows with MSYS2 + PDCurses. On macOS `run_tests.sh` uses the
+system ncurses instead of unpacking a header package, and the harness picks the
+first terminfo entry the machine actually has (`linux`, then `vt100`, then
+`xterm`) rather than assuming `linux` exists.
 
 The game is a full-screen TUI, so it cannot be run in a plain shell — it needs a
 pty. The pattern that works:
@@ -334,14 +370,17 @@ The version lives in exactly one place: the `version=${1:-...}` default at the
 top of `build-deb.sh`. Bump it so it matches the git tag, or the `.deb` ships
 with a version that disagrees with the release it came from.
 
+Pushing the tag is what cuts the release. `.github/workflows/release.yml` then
+builds each platform on its own runner — the `.deb`, a macOS tarball and a
+Windows zip — and publishes them as one GitHub release, so there is no
+hand-built asset and nothing to upload by hand:
+
 ```sh
 # bump the default in build-deb.sh and commit that first
 ./tests/run_tests.sh            # confirms tetris.c is still untouched
-./build-deb.sh                  # -> dist/tetrisplus_<v>_<arch>.deb
 git tag -a v<v> -m "..."
 git push origin main && git push origin v<v>
-gh release create v<v> --title "tetrisplus v<v>" \
-    --notes-file <notes> dist/tetrisplus_<v>_<arch>.deb tetris.c
+gh run watch                    # release.yml builds and publishes
 ```
 
 `gh release create` marks the newest non-prerelease as Latest automatically, so

@@ -16,23 +16,36 @@ mkdir -p "$WORK"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
-# ---- 1. ncurses headers, without root --------------------------------------
-# sudo needs a password in some environments, so unpack the dev package into a
-# local prefix instead of installing it. Override with -I/-L if you have the
-# headers properly installed system-wide.
-PREFIX="$WORK/root"
-if [ ! -f "$PREFIX/usr/include/ncurses.h" ]; then
-    say "fetching ncurses headers"
-    (cd "$WORK" && apt-get download libncurses-dev >/dev/null 2>&1)
-    dpkg -x "$WORK"/libncurses-dev_*.deb "$PREFIX/"
-fi
-INC="$PREFIX/usr/include"
-LIB="$PREFIX/usr/lib/x86_64-linux-gnu"
+# ---- 1. a curses toolchain -------------------------------------------------
+# macOS and the BSDs ship ncurses with the OS, so there is nothing to fetch.
+# On Linux sudo needs a password in some environments, so unpack the dev
+# package into a local prefix instead of installing it.
+BUILD_FLAGS=""
+case $(uname -s 2>/dev/null) in
+    Darwin|*BSD)
+        CURSES_LIBS="-lncurses"
+        ;;
+    *)
+        PREFIX="$WORK/root"
+        if [ ! -f "$PREFIX/usr/include/ncurses.h" ]; then
+            say "fetching ncurses headers"
+            (cd "$WORK" && apt-get download libncurses-dev >/dev/null 2>&1)
+            dpkg -x "$WORK"/libncurses-dev_*.deb "$PREFIX/"
+        fi
+        # The dev package's multiarch directory is named after the CPU, so take
+        # whichever one unpacked rather than hard-coding x86_64.
+        LIB=""
+        for d in "$PREFIX"/usr/lib/*-linux-gnu; do LIB=$d; break; done
+        # libncurses.so in that prefix is a linker script -- INPUT(libncurses.so.6
+        # -ltinfo) -- so -ltinfo is required, not optional. See CLAUDE.md.
+        BUILD_FLAGS="-I$PREFIX/usr/include -L$LIB"
+        CURSES_LIBS="-lncurses -ltinfo"
+        ;;
+esac
 
-# libncurses.so in that prefix is a linker script -- INPUT(libncurses.so.6
-# -ltinfo) -- so -ltinfo is required, not optional. See CLAUDE.md.
 build() {   # build <source.c> <output>
-    gcc -Wall -Wextra "$1" -o "$2" -I"$INC" -L"$LIB" -lncurses -ltinfo
+    # shellcheck disable=SC2086  # the flag strings are deliberately word-split.
+    gcc -Wall -Wextra "$1" -o "$2" $BUILD_FLAGS $CURSES_LIBS
     echo "   built $(basename "$2") -- no warnings"
 }
 

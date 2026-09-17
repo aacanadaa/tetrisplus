@@ -27,7 +27,7 @@ OUT_DIR=$SRC_DIR/dist
 
 # The default release version. Bump this when cutting a release; it should
 # match the git tag, because the .deb version and the tag are the same number.
-version=${1:-1.2.1}
+version=${1:-1.3.0}
 arch=$(dpkg --print-architecture)
 
 # As in install.sh: no -std=c99, because tetris.c needs clock_gettime and
@@ -65,6 +65,9 @@ chmod 0755 "$root/usr/bin/$PROG"
 # -n keeps the original mtime out of the archive so rebuilds are reproducible.
 gzip -9nc "$SRC_DIR/packaging/$PROG.6" > "$root/usr/share/man/man6/$PROG.6.gz"
 cp "$SRC_DIR/README.md" "$root/usr/share/doc/$PKG/README.md"
+if [ -f "$SRC_DIR/README.en.md" ]; then
+    cp "$SRC_DIR/README.en.md" "$root/usr/share/doc/$PKG/README.en.md"
+fi
 cp "$SRC_DIR/LICENSE"   "$root/usr/share/doc/$PKG/copyright"
 
 # Installed-Size is in KiB and must be estimated before control exists, since
