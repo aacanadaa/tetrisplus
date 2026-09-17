@@ -101,6 +101,45 @@ jobs:
       - name: Compile clean under -Wall -Wextra
         run: gcc -O2 -Wall -Wextra -Werror tetris.c -o /tmp/tetris -lncurses
 
+      - name: Debug the child's raw bytes (temporary)
+        run: |
+          python3 - <<'PY'
+          import os, pty, fcntl, termios, struct, select, time, curses
+          for term in ("linux", "vt100", "xterm", "xterm-256color"):
+              try:
+                  curses.setupterm(term=term, fd=-1)
+                  acsc = curses.tigetstr("acsc")
+              except Exception as e:
+                  print(term, "no terminfo:", e)
+                  continue
+              print(term, "acsc=", repr(acsc))
+              pid, fd = pty.fork()
+              if pid == 0:
+                  env = dict(os.environ)
+                  env.update(TERM=term, LC_ALL="C", LANG="C",
+                             LINES="24", COLUMNS="80")
+                  os.execve("/tmp/tetris", ["/tmp/tetris"], env)
+              fcntl.ioctl(fd, termios.TIOCSWINSZ,
+                          struct.pack("HHHH", 24, 80, 0, 0))
+              time.sleep(0.4)
+              data = b""
+              end = time.time() + 0.8
+              while time.time() < end:
+                  r, _, _ = select.select([fd], [], [], 0.1)
+                  if r:
+                      try:
+                          data += os.read(fd, 65536)
+                      except OSError:
+                          break
+              print(term, "bytes=", repr(data[:400]))
+              try:
+                  os.write(fd, b"q")
+                  os.waitpid(pid, 0)
+              except OSError:
+                  pass
+              os.close(fd)
+          PY
+
       - name: Run the pty test suite
         run: ./tests/run_tests.sh
 
