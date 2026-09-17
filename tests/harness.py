@@ -3,9 +3,9 @@
 Follows the recipe in the project's CLAUDE.md: pty + TIOCSWINSZ, pyte to decode,
 and a terminfo with no `rep` capability (pyte cannot decode REP, so it renders
 collapsed borders and misreports columns). The child runs under LC_ALL=C so
-ncurses emits the DEC line-drawing set (which pyte passes through as plain
-`q`/`x`) on every platform, rather than UTF-8 box characters whose multi-byte
-sequences could also straddle a read() boundary.
+ncurses draws ACS from the local terminfo rather than as UTF-8 -- but that
+terminfo differs between Linux and macOS, so the line-drawing bytes are
+normalised to the ASCII sentinels the checks use. See _CP437_ACS below.
 """
 import codecs
 import curses
@@ -23,6 +23,17 @@ import time
 import pyte
 
 COLS, ROWS = 80, 24
+
+# The checks below read the frame's vertical border and use `x` as its sentinel
+# (and ignore the horizontal rule). Which bytes ncurses emits for ACS depends on
+# the local terminfo database: Linux spells the border ASCII `x`, while macOS
+# uses the 8-bit CP437 box bytes -- invalid UTF-8, so a UTF-8 decode turns them
+# into U+FFFD. Under the C locale the stream is ASCII plus at most those PC
+# glyphs, so decoding as CP437 is exact on both platforms (ASCII is identical),
+# and the glyphs are then normalised to the same sentinels.
+_GLYPH_MAP = str.maketrans({"\u2502": "x", "\u2503": "x", "\u2551": "x",
+                            "|": "x", "\u2500": "q", "\u2501": "q",
+                            "\u2550": "q"})
 
 
 def pick_term(preferred):
@@ -50,10 +61,9 @@ class Harness:
         self.stream = pyte.Stream(self.screen)
         self.child = None
 
-        # Multi-byte characters can straddle two read() calls, so decode
-        # incrementally rather than per chunk -- otherwise a split sequence
-        # becomes a sprinkling of U+FFFD.
-        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        # Decode incrementally: a multi-byte sequence can straddle two read()
+        # calls, and per-chunk decoding would shred it.
+        self.decoder = codecs.getincrementaldecoder("cp437")("replace")
 
         # Resolve the terminal before forking: the child's TERM has to name the
         # entry we will actually decode with, or its ncurses aborts at startup.
@@ -116,7 +126,7 @@ class Harness:
         self.pump(settle)
 
     def text(self):
-        return [row.rstrip() for row in self.screen.display]
+        return [row.rstrip().translate(_GLYPH_MAP) for row in self.screen.display]
 
     def dump(self, label=""):
         if label:
