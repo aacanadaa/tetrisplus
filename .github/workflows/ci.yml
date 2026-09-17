@@ -104,15 +104,15 @@ jobs:
       - name: Debug the child's raw bytes (temporary)
         run: |
           python3 - <<'PY'
-          import os, pty, fcntl, termios, struct, select, time, curses
+          import os, pty, fcntl, termios, struct, select, time, curses, signal
           for term in ("linux", "vt100", "xterm", "xterm-256color"):
               try:
                   curses.setupterm(term=term, fd=-1)
                   acsc = curses.tigetstr("acsc")
               except Exception as e:
-                  print(term, "no terminfo:", e)
+                  print(term, "no terminfo:", e, flush=True)
                   continue
-              print(term, "acsc=", repr(acsc))
+              print(term, "acsc=", repr(acsc), flush=True)
               pid, fd = pty.fork()
               if pid == 0:
                   env = dict(os.environ)
@@ -121,9 +121,8 @@ jobs:
                   os.execve("/tmp/tetris", ["/tmp/tetris"], env)
               fcntl.ioctl(fd, termios.TIOCSWINSZ,
                           struct.pack("HHHH", 24, 80, 0, 0))
-              time.sleep(0.4)
               data = b""
-              end = time.time() + 0.8
+              end = time.time() + 1.2
               while time.time() < end:
                   r, _, _ = select.select([fd], [], [], 0.1)
                   if r:
@@ -131,12 +130,12 @@ jobs:
                           data += os.read(fd, 65536)
                       except OSError:
                           break
-              print(term, "bytes=", repr(data[:400]))
-              try:
-                  os.write(fd, b"q")
-                  os.waitpid(pid, 0)
-              except OSError:
-                  pass
+                  if b"\x1b[6n" in data:
+                      data = data.replace(b"\x1b[6n", b"")
+                      os.write(fd, b"\x1b[1;1R")
+              print(term, "bytes=", repr(data[:500]), flush=True)
+              os.kill(pid, signal.SIGKILL)
+              os.waitpid(pid, 0)
               os.close(fd)
           PY
 
